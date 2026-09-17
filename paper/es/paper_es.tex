@@ -21,7 +21,7 @@
 \definecolor{barsolid}{RGB}{25,25,25}
 \definecolor{bargray}{RGB}{143,143,137}
 
-\title{\LARGE\bfseries Cuando el Agente Decide:\\[2pt] Cinco Fallos de Diseño en Agentes Autónomos de Seguridad Ofensiva}
+\title{\LARGE\bfseries Cuando el Agente Decide:\\[2pt] Diez Fallos de Diseño en Agentes Autónomos de Seguridad Ofensiva}
 \author{
   {\large Ricardo Martínez}\\[2pt]
   {\small Cloud Security \& IA Aplicada}
@@ -34,7 +34,7 @@
     \maketitle
     \begin{abstract}
     \noindent
-    Los agentes de IA autónomos para pentesting prometen escalar el trabajo ofensivo sin escalar el equipo humano. Este texto documenta cinco observaciones de campo, extraídas de operar uno de estos sistemas contra objetivos reales durante varios meses, sobre por qué la confiabilidad de estos agentes depende menos de la capacidad del modelo que los orquesta y más de decisiones de ingeniería concretas: qué se le permite decidir al LLM, cómo se verifica un hallazgo antes de creerlo, y qué tan silenciosamente se degrada el sistema cuando algo en su entorno falla. Se presentan cuatro figuras basadas en mediciones reales y se cierra con cinco principios de diseño aplicables a cualquier sistema agentic que opere sobre superficie de ataque real.
+    Los agentes de IA autónomos para pentesting prometen escalar el trabajo ofensivo sin escalar el equipo humano. Este texto documenta diez observaciones de campo, extraídas de operar uno de estos sistemas contra objetivos reales durante varios meses, sobre por qué la confiabilidad de estos agentes depende menos de la capacidad del modelo que los orquesta y más de decisiones de ingeniería concretas: qué se le permite decidir al LLM, dónde vive realmente el problema de recall, cuándo vale la pena reintentar una falla, cómo se verifica un hallazgo (y cómo se verifica al propio verificador) antes de creerlo, y qué tan silenciosamente se degrada un sistema cuando su entorno, su reloj de vida o sus capas de censura fallan sin hacer ruido. Se presentan diez figuras y una tabla comparativa basadas en mediciones reales, y se cierra con nueve principios de diseño aplicables a cualquier sistema agentic que opere sobre superficie de ataque real.
     \end{abstract}
     \vspace{1.2em}
   \end{@twocolumnfalse}
@@ -71,6 +71,89 @@ En un sistema con cerca de sesenta capacidades de ataque disponibles (inyección
 
 La respuesta de ingeniería no fue afinar el prompt para que el agente ``recordara'' usar más herramientas (Figura~\ref{fig:coverage}). Fue sacar las capacidades de alto valor y bajo riesgo de falso positivo del terreno discrecional del LLM y convertirlas en un barrido determinístico que corre siempre, en paralelo, antes de que el agente entre en juego. El modelo queda para lo que de verdad requiere criterio: encadenar hallazgos, priorizar superficie ambigua, redactar contexto.
 
+Llevado a su forma final, el pipeline completo de un engagement real se ve como en la Figura~\ref{fig:pipeline}: una cadena larga de pasos deterministas que corren siempre, con una sola bisagra discrecional en el medio.
+
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[
+  node distance=2mm,
+  chip/.style={rectangle, draw=lineblack, rounded corners=1.5pt, minimum height=10mm, text width=1.62cm, align=center, font=\fontsize{6.3}{7.4}\selectfont, line width=0.4pt},
+  arr/.style={-{Latex[length=1.6mm]}, line width=0.4pt}
+]
+\node[chip, fill=boxgreen] (c1) {Reconocimiento \& fingerprinting};
+\node[chip, fill=boxgreen, right=of c1] (c2) {Checks de exposición pasiva};
+\node[chip, fill=boxgreen, right=of c2] (c3) {Superficie de inyección};
+\node[chip, fill=boxgreen, right=of c3] (c4) {Fuga de secretos / credenciales};
+\node[chip, fill=boxgreen, right=of c4] (c5) {Crawl autenticado \& abuso de tokens};
+\node[chip, fill=boxgreen, right=of c5] (c6) {Barrido de ataque determinístico};
+\node[chip, fill=boxyellow, right=of c6, dashed] (c7) {[LLM] Encadenar exploits};
+\node[chip, fill=boxgreen, right=of c7] (c8) {Verificación independiente};
+\node[chip, fill=boxgreen, right=of c8] (c9) {Reporte};
+
+\foreach \a/\b in {c1/c2,c2/c3,c3/c4,c4/c5,c5/c6,c6/c7,c7/c8,c8/c9}
+  \draw[arr] (\a) -- (\b);
+
+\node[below=3mm of c1, anchor=west, xshift=-0.2cm, font=\scriptsize] (leg1) {};
+\draw[fill=boxgreen, draw=lineblack, line width=0.4pt] (0.05,-1.55) rectangle (0.35,-1.3);
+\node[right=1mm of {(0.35,-1.425)}, anchor=west, font=\scriptsize] {núcleo determinístico --- corre siempre};
+\draw[fill=boxyellow, draw=lineblack, dashed, line width=0.4pt] (6.1,-1.55) rectangle (6.4,-1.3);
+\node[right=1mm of {(6.4,-1.425)}, anchor=west, font=\scriptsize] {a discreción del modelo};
+\end{tikzpicture}
+\caption{Forma real de un pipeline de pentest de punta a punta. De nueve etapas representativas, ocho son un barrido determinístico que corre siempre; solo el encadenamiento de exploits queda a discreción del modelo, precisamente porque decidir \emph{si} conviene combinar dos hallazgos es el tipo de juicio que sí vale la pena delegar.}
+\label{fig:pipeline}
+\end{figure*}
+
+\section{El recall es un problema de descubrimiento antes que de detección}
+
+Cuando un scanner falla en encontrar una vulnerabilidad real, el instinto es sospechar del detector: el payload no era el correcto, el motor de confirmación era demasiado conservador. En la práctica, la causa más común estaba un paso antes: el detector nunca vio el endpoint vulnerable, porque la fase de descubrimiento de superficie nunca lo puso sobre la mesa.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+\node[rectangle, draw=lineblack, fill=boxred, rounded corners=2pt, text width=3.3cm, align=center, minimum height=8mm, line width=0.4pt] (a1) {Solo specs OpenAPI / bundles JS};
+\node[rectangle, draw=lineblack, fill=boxgray, rounded corners=2pt, text width=3.3cm, align=center, minimum height=8mm, line width=0.4pt, below=4mm of a1] (a2) {Testeo de inyección};
+\node[font=\scriptsize\itshape, right=1mm of a2, text width=2.1cm] {0 candidatos en apps sin spec pública};
+\draw[-{Latex[length=1.8mm]}, line width=0.4pt] (a1) -- (a2);
+
+\node[rectangle, draw=lineblack, fill=boxgreen, rounded corners=2pt, text width=3.3cm, align=center, minimum height=10mm, line width=0.4pt, below=12mm of a2] (b1) {+ formularios HTML \\ + enlaces \texttt{?param=} mismo origen};
+\node[rectangle, draw=lineblack, fill=boxgray, rounded corners=2pt, text width=3.3cm, align=center, minimum height=8mm, line width=0.4pt, below=4mm of b1] (b2) {Testeo de inyección};
+\node[font=\scriptsize\itshape, right=1mm of b2, text width=2.3cm] {SQLi/XSS reales confirmados en formularios server-rendered};
+\draw[-{Latex[length=1.8mm]}, line width=0.4pt] (b1) -- (b2);
+\end{tikzpicture}
+\caption{Ampliar el descubrimiento de superficie, sin tocar el motor de confirmación, cambió el recall de 0 a hallazgos reales confirmados. La app de prueba no tenía spec OpenAPI: sus parámetros vivían solo en formularios renderizados por el servidor.}
+\label{fig:discovery}
+\end{figure}
+
+La Figura~\ref{fig:discovery} documenta el caso: el mismo motor de confirmación de inyección, sin ningún cambio, pasó de no tener nada que probar a confirmar vulnerabilidades reales en cuanto el descubrimiento empezó a parsear formularios y enlaces \texttt{?param=} de mismo origen, además de las specs OpenAPI y bundles JS que ya cubría. El motor de detección nunca fue el problema. Antes de ajustar payloads o umbrales de confirmación, vale la pena confirmar que la superficie descubierta realmente incluye dónde vive la vulnerabilidad.
+
+\section{No todos los reintentos son iguales}
+
+Una auditoría adversarial del código encontró el mismo patrón de fragilidad repetido en más de treinta puntos distintos: una petición de red única, y cualquier excepción --- un timeout, un reset de conexión, un 5xx transitorio --- se trataba como resultado definitivo. Un blip de red durante un descubrimiento o una confirmación se traducía en un miss silencioso, indistinguible de un objetivo genuinamente limpio.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node distance=6mm and 7mm,
+  box/.style={rectangle, rounded corners=2pt, draw=lineblack, text width=3.0cm, align=center, font=\small, minimum height=9mm, line width=0.5pt},
+  dec/.style={diamond, draw=lineblack, aspect=2.6, text width=2.6cm, align=center, font=\scriptsize, inner sep=1pt, line width=0.5pt},
+  arr/.style={-{Latex[length=2mm]}, line width=0.5pt}
+]
+\node[box, fill=boxgray] (f1) {Falla una petición};
+\node[dec, fill=boxyellow, below=of f1] (d1) {¿Es transitoria? (excepción / 5xx / 429)};
+\node[box, fill=boxgreen, below left=9mm and -3mm of d1] (y1) {Reintenta con backoff acotado};
+\node[box, fill=boxgreen, below right=9mm and -3mm of d1] (n1) {Acepta el resultado, no reintentes};
+\node[font=\scriptsize\itshape, below=3mm of n1, text width=3.2cm] {reintentar latencia real solo quema presupuesto de fase};
+
+\draw[arr] (f1) -- (d1);
+\draw[arr] (d1.west) -| node[above,pos=0.25,font=\scriptsize]{sí} (y1);
+\draw[arr] (d1.east) -| node[above,pos=0.25,font=\scriptsize]{no} (n1);
+\end{tikzpicture}
+\caption{Reintento acotado solo en fallo transitorio. Reintentar un timeout genuino de un objetivo lento no mejora el recall, y sí puede agotar el presupuesto de tiempo de la fase --- el reintento indiscriminado es tan dañino como no reintentar nunca.}
+\label{fig:retry}
+\end{figure}
+
+El arreglo (Figura~\ref{fig:retry}) no fue reintentar todo, sino distinguir el tipo de falla: solo excepción de conexión, 5xx o 429 (\textit{rate-limit}) disparan un reintento acotado con backoff; una respuesta definitiva --- incluyendo un timeout genuino contra un objetivo lento --- se acepta y no se reintenta. Un matiz adicional apareció al depurar un objetivo de prueba genuinamente inestable bajo carga: el mismo código pasaba y fallaba en corridas distintas contra el mismo objetivo, sin ningún cambio de por medio. La lección ahí fue separar dos preguntas distintas antes de ``arreglar'' nada: ¿el código regresionó, o el objetivo de prueba es el que es inestable? Confundir una y otra lleva a perseguir bugs que no existen.
+
 \section{Verificación adversarial, no opcional}
 
 Un agente que reporta sus propios hallazgos sin que nadie más los cuestione tiene un conflicto de interés estructural: fue entrenado para completar la tarea, no para dudar de sí mismo.
@@ -104,6 +187,33 @@ La instrucción no estaba mal por descuido, estaba mal porque optimizaba lo inco
 
 El sistema, en este caso, funcionó como debía. La capa de verificación cazó el 86\% del ruido. Pero un sistema que necesita esa capa para no mentir por accidente merece la misma desconfianza estructural que cualquier fuente sin verificar, aunque llegue con forma de reporte técnico.
 
+\section{Verificar al verificador}
+
+La capa de verificación de la sección anterior resuelve un problema y crea uno nuevo, más sutil: ¿quién audita que el propio verificador siga midiendo algo real? Un caso concreto lo expuso. Un harness de pruebas comprobaba que todas las fases obligatorias del pipeline se hubieran ejecutado, comparando contra una lista de referencia mantenida a mano dentro del propio harness. Cuando el pipeline real ganó y perdió fases en iteraciones sucesivas, esa lista de referencia no se actualizó al mismo ritmo. El resultado: el check seguía reportando éxito, siempre, sin importar qué corriera de verdad --- una prueba tautológica que había dejado de probar nada.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node distance=6mm and 8mm,
+  box/.style={rectangle, rounded corners=2pt, draw=lineblack, text width=3.2cm, align=center, font=\small, minimum height=9mm, line width=0.5pt},
+  dec/.style={diamond, draw=lineblack, aspect=2.5, text width=2.6cm, align=center, font=\scriptsize, inner sep=1pt, line width=0.5pt},
+  arr/.style={-{Latex[length=2mm]}, line width=0.5pt}
+]
+\node[box, fill=boxgray] (v1) {El sistema real gana o pierde una fase};
+\node[dec, fill=boxyellow, below=of v1] (v2) {¿La referencia del harness se deriva del mismo lugar que el runtime?};
+\node[box, fill=boxgreen, below left=9mm and -3mm of v2] (v3) {El gate sigue midiendo algo real};
+\node[box, fill=boxred, below right=9mm and -3mm of v2] (v4) {El gate reporta verde siempre, sin verificar nada};
+
+\draw[arr] (v1) -- (v2);
+\draw[arr] (v2.west) -| node[above,pos=0.25,font=\scriptsize]{sí} (v3);
+\draw[arr] (v2.east) -| node[above,pos=0.25,font=\scriptsize]{no} (v4);
+\end{tikzpicture}
+\caption{Un verificador con su propia copia de la verdad, mantenida a mano y no derivada de la misma fuente que el sistema real, diverge en silencio. El gate deja de fallar nunca --- no porque el sistema sea perfecto, sino porque el gate dejó de comparar contra algo real.}
+\label{fig:metaverify}
+\end{figure}
+
+El arreglo (Figura~\ref{fig:metaverify}) fue hacer que la lista de referencia se derivara del mismo lugar de donde el runtime obtiene sus fases, en vez de vivir como una copia paralela mantenida a mano. Cualquier capa de verificación --- la de esta sección o la de la anterior --- es, en sí misma, código que puede pudrirse en silencio si su propia noción de ``verdad'' no está atada a la misma fuente que el sistema que vigila.
+
 \section{Jerarquía de evidencia}
 
 No todos los ``hallazgos confirmados'' que produce un agente de IA tienen el mismo peso probatorio. Ordenarlos por qué tan difícil es que produzcan un falso positivo cambia cómo debe leerse un reporte generado por IA.
@@ -113,16 +223,16 @@ No todos los ``hallazgos confirmados'' que produce un agente de IA tienen el mis
 \begin{tikzpicture}[font=\scriptsize]
 \draw[-{Latex[length=1.8mm]}, line width=0.5pt] (0,0.1) -- (0,-3.55) node[below, font=\scriptsize\itshape, text width=2.4cm, align=center, yshift=-1mm]{riesgo de falso\\positivo};
 
-\node[anchor=east, text width=2.6cm, align=right] at (-0.15,0) {Heurística de texto};
+\node[anchor=east, text width=1.7cm, align=right] at (-0.1,0) {Heurística de texto};
 \draw[draw=lineblack,fill=boxgray,line width=0.4pt] (0,-0.21) rectangle (2.0,0.21);
 
-\node[anchor=east, text width=2.6cm, align=right] at (-0.15,-1.1) {Señal por tiempo};
+\node[anchor=east, text width=1.7cm, align=right] at (-0.1,-1.1) {Señal por tiempo};
 \draw[draw=lineblack,fill=bargray,line width=0.4pt] (0,-1.31) rectangle (3.5,-0.89);
 
-\node[anchor=east, text width=2.6cm, align=right] at (-0.15,-2.2) {Herramienta real};
+\node[anchor=east, text width=1.7cm, align=right] at (-0.1,-2.2) {Herramienta real};
 \draw[draw=lineblack,fill=bargray!70!black,line width=0.4pt] (0,-2.41) rectangle (5.0,-1.99);
 
-\node[anchor=east, text width=2.6cm, align=right] at (-0.15,-3.3) {Callback de red};
+\node[anchor=east, text width=1.7cm, align=right] at (-0.1,-3.3) {Callback de red};
 \draw[draw=lineblack,fill=barsolid,line width=0.4pt] (0,-3.51) rectangle (6.2,-3.09);
 \end{tikzpicture}
 \caption{Jerarquía de confianza para técnicas de confirmación automatizada. El callback de red, donde el propio objetivo hace una petición saliente hacia un dominio único generado para esa prueba, es prueba autocontenida: no requiere que el modelo interprete nada.}
@@ -204,14 +314,96 @@ Un motor de inyección determinístico dejó de correr durante una sesión compl
 
 Este tipo de falla reduce la cobertura real por debajo de la reportada, de forma consistente mientras la condición del entorno persista. La respuesta correcta no es documentar ``recuerda configurar la variable''; eso traslada la responsabilidad a la memoria humana. La respuesta correcta es que el sistema garantice sus propias condiciones de entorno al ejecutar cada herramienta, sin importar cómo fue invocado.
 
+El mismo patrón de fallo silencioso aparece a nivel de todo un engagement, no solo de una herramienta. Un escaneo activo quedó marcado como ``en ejecución'' durante más de una hora sin que nadie lo notara: el objetivo estaba reiniciando conexiones bajo un firewall de aplicación, el bucle de la fase se congeló esperando una respuesta que nunca llegó, y el propio mecanismo de \textit{heartbeat} del escaneo se congeló junto con él --- un proceso que deja de respirar no puede reportar que dejó de respirar.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+\draw[line width=0.5pt] (0,0) -- (6.2,0);
+\foreach \x in {0,0.5,...,2.0}
+  \draw[fill=lineblack] (\x,0) circle (0.035);
+\draw[dashed, line width=0.4pt, lineblack!50] (2.0,0) -- (4.6,0);
+\node[font=\scriptsize\itshape] at (3.3,0.35) {sin heartbeat};
+\draw[-{Latex[length=1.8mm]}, line width=0.6pt, boxred!60!black] (4.6,0.9) -- (4.6,0.08);
+\node[font=\scriptsize, text width=2.6cm, align=center] at (4.6,1.2) {estado sigue diciendo ``en ejecución''};
+\node[rectangle, draw=lineblack, fill=boxgreen, rounded corners=2pt, minimum height=8mm, text width=2.6cm, align=center, line width=0.4pt] at (5.5,-1.1) {barrido externo detecta staleness y marca fallo};
+\draw[-{Latex[length=1.8mm]}, line width=0.5pt] (4.6,0) .. controls (4.6,-0.7) and (5.0,-0.9) .. (4.9,-1.1);
+\end{tikzpicture}
+\caption{Un proceso que se congela no puede reportar que se congeló. El \textit{heartbeat} propio de la tarea murió junto con la tarea; solo un barrido de liveness externo, ajeno al bucle que falló, pudo detectar y corregir el estado atascado.}
+\label{fig:liveness}
+\end{figure}
+
+La lección de la Figura~\ref{fig:liveness} es distinta a la de la herramienta con PATH incorrecto, aunque ambas sean fallos silenciosos: aquí ningún mecanismo \emph{interno} a la tarea puede detectar su propio congelamiento, por definición. Hace falta un observador externo --- un barrido periódico, ajeno al bucle que se está monitoreando --- que mida vida por tiempo transcurrido, no por que la propia tarea diga que sigue viva.
+
+\section{Defensa en profundidad para datos sensibles}
+
+Un sistema que investiga superficie de ataque real inevitablemente toca datos que no deberían llegar a un reporte en claro: credenciales, tokens, listados de usuarios. La tentación de diseño es censurar esos datos en el punto donde se generan y darlo por resuelto. Esa tentación es exactamente el error: un único punto de censura es, por definición, un único punto de fallo.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node distance=4mm,
+  box/.style={rectangle, rounded corners=2pt, draw=lineblack, text width=3.0cm, align=center, font=\scriptsize, minimum height=8mm, line width=0.4pt},
+  gate/.style={rectangle, draw=lineblack, fill=boxyellow, minimum height=6mm, minimum width=14mm, font=\scriptsize, line width=0.4pt},
+  arr/.style={-{Latex[length=1.8mm]}, line width=0.4pt}
+]
+\node[box, fill=boxgray] (r1) {Evidencia cruda, cualquier ruta de código};
+\node[gate, below=of r1] (g1) {redact()};
+\node[box, fill=boxgray, below=of g1] (r2) {Almacenamiento persistente};
+\node[gate, below=of r2] (g2) {redact()};
+\node[box, fill=boxgray, below=of g2] (r3) {Render PDF / HTML};
+\node[gate, below=of r3] (g3) {redact()};
+\node[box, fill=boxgreen, below=of g3] (r4) {Lector};
+
+\draw[arr] (r1) -- (g1);
+\draw[arr] (g1) -- (r2);
+\draw[arr] (r2) -- (g2);
+\draw[arr] (g2) -- (r3);
+\draw[arr] (r3) -- (g3);
+\draw[arr] (g3) -- (r4);
+\node[font=\scriptsize\itshape, right=2mm of g1, text width=2.1cm] {si esta falla...};
+\node[font=\scriptsize\itshape, right=2mm of g2, text width=2.1cm] {...esta la atrapa};
+\end{tikzpicture}
+\caption{Tres capas de censura independientes, no una cadena de confianza secuencial. Un nuevo código de ruta que se salta la primera capa todavía pasa por las otras dos antes de llegar a un lector.}
+\label{fig:redact}
+\end{figure}
+
+El caso real que forzó este diseño (Figura~\ref{fig:redact}): una fase nueva del sistema generaba evidencia con un formato distinto al que la primera capa de censura sabía reconocer, y un listado de nombres de usuario reales se coló sin máscara hasta el punto de persistencia. No llegó a un lector porque una segunda capa, en el punto de persistencia --- que censura \emph{todo} lo que se escribe, sin importar qué fase lo produjo --- lo interceptó ahí. La propiedad que importa no es que cada capa sea perfecta; es que ninguna capa individual es un requisito para que el sistema completo sea seguro.
+
+\section{Una validación de una sola vez no es una frontera}
+
+Restringir a qué puede apuntar un escaneo (nunca metadata de nube, nunca rangos privados sin autorización explícita) suena, a primera vista, como un chequeo que se hace una vez, al recibir la solicitud. Esa es precisamente la superficie que un atacante --- o un objetivo hostil --- puede explotar.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+\node[rectangle, draw=lineblack, fill=boxgreen, rounded corners=2pt, text width=3.0cm, align=center, minimum height=9mm, line width=0.4pt] (t0) {t=0: se valida la IP del objetivo --- pública, autorizada};
+\node[rectangle, draw=lineblack, fill=boxgray, rounded corners=2pt, text width=3.0cm, align=center, minimum height=9mm, line width=0.4pt, right=10mm of t0] (t1) {t=1: una redirección o un DNS-rebind cambia la IP real de conexión};
+\draw[-{Latex[length=1.8mm]}, line width=0.4pt] (t0) -- (t1);
+
+\node[rectangle, draw=lineblack, fill=boxred, rounded corners=2pt, text width=3.0cm, align=center, minimum height=9mm, line width=0.4pt, below=8mm of t1] (bad) {Solo se validó en t=0: la conexión real nunca se revisa};
+\node[rectangle, draw=lineblack, fill=boxgreen, rounded corners=2pt, text width=3.0cm, align=center, minimum height=9mm, line width=0.4pt, below=8mm of t0] (good) {Se revalida en cada hop y se fija la IP exacta ya validada};
+\draw[-{Latex[length=1.8mm]}, line width=0.4pt] (t1) -- (bad);
+\draw[-{Latex[length=1.8mm]}, line width=0.4pt] (t0) -- (good);
+\end{tikzpicture}
+\caption{Una validación de frontera revisa la IP en el momento de aceptar la solicitud (t=0); una redirección o un DNS-rebind puede cambiar a qué se conecta realmente el sistema después (t=1). Cerrar la ventana requiere revalidar en cada salto y fijar la conexión a la IP exacta que se validó.}
+\label{fig:toctou}
+\end{figure}
+
+El principio de la Figura~\ref{fig:toctou} generaliza más allá del escaneo de red: cualquier control de seguridad que se exprese como ``se revisó al entrar'' deja abierta la ventana entre la revisión y el uso real. Si el sistema después sigue redirecciones, resuelve nombres de nuevo, o reutiliza una decisión tomada minutos antes, esa ventana es explotable. La corrección no es una validación más estricta al inicio; es repetir la misma validación en cada punto donde el sistema realmente actúa, y atar la acción al resultado exacto de esa revalidación.
+
 \section{Principios de diseño}
 
 \begin{enumerate}
 \item \textbf{Lo crítico no es opcional para el modelo.} Si una capacidad debe correr siempre, conviértela en un paso determinístico del pipeline, no en una herramienta más entre muchas.
+\item \textbf{El recall se depura en el descubrimiento, no solo en la detección.} Un motor de confirmación perfecto no encuentra nada si nunca se le presenta el endpoint vulnerable.
+\item \textbf{Reintenta la falla transitoria, acepta la definitiva.} Reintentar indiscriminadamente cualquier error es tan dañino para el recall como no reintentar nunca.
 \item \textbf{Ningún hallazgo se cree en la misma pasada que lo produjo.} Un paso de verificación independiente, sin el razonamiento original a la vista, distingue un reporte de una alucinación con formato de reporte.
+\item \textbf{El verificador también necesita ser verificado.} Una prueba cuya propia noción de ``verdad'' se mantiene a mano, sin atarse a la fuente real, se vuelve tautológica en silencio.
 \item \textbf{Jerarquiza la evidencia y dilo en el reporte.} Un callback de red y una heurística de texto no deberían llegar al lector bajo la misma etiqueta de ``confirmado''.
 \item \textbf{El contexto histórico es una pista, nunca un hecho.} Si un prompt autoriza al modelo a no re-verificar algo, ese algo terminará reportado sin evidencia.
-\item \textbf{El entorno de ejecución es parte de la superficie de confiabilidad.} Un sistema que depende de que su entorno esté ``bien configurado'' tiene una dependencia frágil disfrazada de asunción técnica.
+\item \textbf{El entorno de ejecución es parte de la superficie de confiabilidad.} Un sistema que depende de que su entorno esté ``bien configurado'' tiene una dependencia frágil disfrazada de asunción técnica; esto incluye poder detectar su propio congelamiento, algo que ningún mecanismo puramente interno puede hacer.
+\item \textbf{Ningún control de seguridad es una validación de una sola vez.} Repite la revisión en cada punto donde el sistema actúa de verdad, y usa capas independientes para datos sensibles --- nunca un único punto de censura o de validación.
 \end{enumerate}
 
 \vspace{0.6em}
