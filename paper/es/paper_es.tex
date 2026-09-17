@@ -135,7 +135,29 @@ Cuando un sistema tiene disponible una técnica de confirmación por callback de
 
 La suposición natural es que un modelo más grande, más especializado o ``sin restricciones'' produce mejores resultados de seguridad ofensiva. Puesta a prueba de forma controlada, esa suposición no se sostuvo.
 
-La lección no es que los modelos especializados sean malos. Es que orquestar herramientas de forma confiable dentro de un contrato estructurado es una habilidad distinta de ``saber de seguridad ofensiva''. Una prueba separada con un modelo especializado en ofensiva lo mostró sin ambigüedad: el modelo no respetaba el contrato de \textit{tool-calling} del orquestador, inventaba su propia sintaxis de salida en vez de usar las llamadas a función estructuradas que el sistema esperaba, quedando inutilizable como agente pese a tener conocimiento de dominio sólido.
+La lección no es que los modelos especializados sean malos. Es que orquestar herramientas de forma confiable dentro de un contrato estructurado es una habilidad distinta de ``saber de seguridad ofensiva''. Se probaron cuatro modelos locales bajo el mismo esquema de \textit{tool-calling} del orquestador, con resultados que se muestran en la Tabla~\ref{tab:models}.
+
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{|p{2.9cm}|p{1.0cm}|p{3.4cm}|p{2.4cm}|p{2.4cm}|}
+\hline
+\textbf{Modelo} & \textbf{Params} & \textbf{Contrato de tool-calling} & \textbf{Recall / uso real} & \textbf{Tiempo / veredicto} \\
+\hline
+Base & 9B & Respetado sin excepción & 6/6 vulnerabilidades conocidas & 21.5 min --- referencia \\
+\hline
+Fine-tune ``sin censura'' & 9B & Respetado sin excepción & 6/6 vulnerabilidades conocidas & 60.4 min (2.8\texttimes) + 1 FP nuevo por confundir una herramienta mal instalada con un hallazgo real \\
+\hline
+Especializado ofensiva A & 7B & Ollama lo reporta como compatible, pero fabrica su propio XML en vez de llenar \texttt{tool\_calls} & No usable como agente & Prompt complejo: 33+ min sin cerrar la tarea \\
+\hline
+Especializado ofensiva B & 8B & Rechazado en origen (arquitectura solo-completion, sin soporte de tools) & No usable como agente & 4.9 s en modo Q\&A puro --- correcto citando la CVE consultada, pero nunca ejecuta un tool \\
+\hline
+\end{tabular}
+\caption{Comparación empírica de cuatro modelos locales bajo el mismo contrato de tool-calling del orquestador. Los dos modelos ``especializados en ofensiva'' fallan antes de llegar a medir recall: uno inventa su propio formato de salida, el otro ni siquiera declara soporte de herramientas. Ambos son útiles como modelos de síntesis o Q\&A de seguridad, ninguno sirve como agente.}
+\label{tab:models}
+\end{table*}
+
+Los dos modelos especializados en ofensiva no llegaron siquiera a la etapa de medir recall: uno inventaba su propia sintaxis de salida en vez de usar las llamadas a función estructuradas que el sistema esperaba; el otro rechazaba la solicitud desde el nivel de arquitectura porque su familia de modelo no implementa \textit{tool-calling} en absoluto. Ambos resultaron útiles como modelos de consulta o síntesis de seguridad en modo texto libre, pero ninguno pudo participar del bucle agentic.
 
 \begin{figure*}[t]
 \centering

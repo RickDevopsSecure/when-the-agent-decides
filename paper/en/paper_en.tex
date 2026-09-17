@@ -135,7 +135,29 @@ When a system has an out-of-band network callback technique available (Figure~\r
 
 The natural assumption is that a bigger, more specialized, or ``uncensored'' model produces better offensive security results. Put to a controlled test, that assumption did not hold.
 
-The lesson is not that specialized models are bad. It is that reliably orchestrating tools within a structured contract is a distinct skill from ``knowing offensive security.'' A separate test with a model specialized in offensive security showed this without ambiguity: the model did not honor the orchestrator's tool-calling contract, it invented its own output syntax instead of using the structured function calls the system expected, rendering it effectively unusable as an agent despite solid domain knowledge.
+The lesson is not that specialized models are bad. It is that reliably orchestrating tools within a structured contract is a distinct skill from ``knowing offensive security.'' Four local models were benchmarked under the exact same tool-calling contract used by the orchestrator; results are summarized in Table~\ref{tab:models}.
+
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{|p{2.9cm}|p{1.0cm}|p{3.4cm}|p{2.4cm}|p{2.4cm}|}
+\hline
+\textbf{Model} & \textbf{Params} & \textbf{Tool-calling contract} & \textbf{Recall / usability} & \textbf{Runtime / verdict} \\
+\hline
+Base & 9B & Honored without exception & 6/6 known vulnerabilities & 21.5 min --- reference \\
+\hline
+``Uncensored'' fine-tune & 9B & Honored without exception & 6/6 known vulnerabilities & 60.4 min (2.8\texttimes) + 1 new FP from mistaking a broken tool install for a real finding \\
+\hline
+Offensive-specialized A & 7B & Ollama reports it as tool-capable, but it fabricates its own XML instead of filling \texttt{tool\_calls} & Unusable as an agent & Complex prompt: 33+ min, never closed the task \\
+\hline
+Offensive-specialized B & 8B & Rejected outright (completion-only architecture, no tool support) & Unusable as an agent & 4.9s in pure Q\&A mode --- correctly cited the CVE queried, but never executes a tool \\
+\hline
+\end{tabular}
+\caption{Empirical comparison of four local models under the orchestrator's exact tool-calling contract. The two ``offensive-specialized'' models fail before recall can even be measured: one invents its own output format, the other doesn't declare tool support at all. Both are useful as security Q\&A or synthesis models; neither works as an agent.}
+\label{tab:models}
+\end{table*}
+
+Neither offensive-specialized model made it as far as measuring recall: one invented its own output syntax instead of using the structured function calls the system expected; the other rejected the request at the architecture level, since its model family does not implement tool-calling at all. Both proved useful as free-text security Q\&A or synthesis models, but neither could participate in the agentic loop.
 
 \begin{figure*}[t]
 \centering
