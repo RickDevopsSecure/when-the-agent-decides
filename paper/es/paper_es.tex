@@ -1,0 +1,198 @@
+\documentclass[10pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-noindentfirst]{babel}
+\usepackage{lmodern}
+\usepackage[margin=0.85in,columnsep=0.32in]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+
+\definecolor{boxgreen}{RGB}{224,242,224}
+\definecolor{boxyellow}{RGB}{252,244,214}
+\definecolor{boxred}{RGB}{250,222,222}
+\definecolor{boxgray}{RGB}{238,238,235}
+\definecolor{lineblack}{RGB}{20,20,20}
+\definecolor{barsolid}{RGB}{25,25,25}
+\definecolor{bargray}{RGB}{143,143,137}
+
+\title{\LARGE\bfseries Cuando el Agente Decide:\\[2pt] Cinco Fallos de Diseño en Agentes Autónomos de Seguridad Ofensiva}
+\author{
+  {\large Ricardo Martínez}\\[2pt]
+  {\small Cloud Security \& IA Aplicada}
+}
+\date{\small Septiembre 2026}
+
+\begin{document}
+\twocolumn[
+  \begin{@twocolumnfalse}
+    \maketitle
+    \begin{abstract}
+    \noindent
+    Los agentes de IA autónomos para pentesting prometen escalar el trabajo ofensivo sin escalar el equipo humano. Este texto documenta cinco observaciones de campo, extraídas de operar uno de estos sistemas contra objetivos reales durante varios meses, sobre por qué la confiabilidad de estos agentes depende menos de la capacidad del modelo que los orquesta y más de decisiones de ingeniería concretas: qué se le permite decidir al LLM, cómo se verifica un hallazgo antes de creerlo, y qué tan silenciosamente se degrada el sistema cuando algo en su entorno falla. Se presentan cuatro figuras basadas en mediciones reales y se cierra con cinco principios de diseño aplicables a cualquier sistema agentic que opere sobre superficie de ataque real.
+    \end{abstract}
+    \vspace{1.2em}
+  \end{@twocolumnfalse}
+]
+
+\section{El espejismo de la autonomía total}
+
+La primera intuición al construir un agente de pentesting es dejar que el modelo de lenguaje decida qué herramienta usar en cada paso. Es también la primera fuente de un problema de cobertura que no se ve hasta que se mide.
+
+En un sistema con cerca de sesenta capacidades de ataque disponibles (inyección, SSRF, deserialización, fuga de secretos, control de acceso, JWT, GraphQL), auditar cuántas se ejecutaban de forma garantizada en cada corrida arrojó un número incómodo: menos de veinte. El resto solo corría si el agente, en ese momento, decidía que valía la pena llamarlas. Una prueba concreta lo confirmó: una técnica de reconocimiento de dominio apareció en una corrida y desapareció en la siguiente contra el mismo objetivo, sin que nada en el entorno hubiera cambiado.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node distance=7mm and 8mm,
+  box/.style={rectangle, rounded corners=2pt, draw=lineblack, text width=3.1cm, align=center, font=\small, minimum height=9mm, line width=0.5pt},
+  dec/.style={diamond, draw=lineblack, aspect=2.4, text width=2.5cm, align=center, font=\scriptsize, inner sep=1pt, line width=0.5pt},
+  arr/.style={-{Latex[length=2mm]}, line width=0.5pt}
+]
+\node[box, fill=boxgray] (cap) {Capacidad de ataque disponible};
+\node[dec, fill=boxyellow, below=of cap] (dec1) {¿Pertenece al núcleo determinístico?};
+\node[box, fill=boxgreen, below left=9mm and -2mm of dec1] (yes) {Se ejecuta siempre, en paralelo};
+\node[box, fill=boxred, below right=9mm and -2mm of dec1] (no) {El modelo decide si la llama};
+\node[box, fill=boxgray, below=8mm of no, text width=3.3cm] (out) {Cobertura sujeta al criterio del agente en ese turno};
+
+\draw[arr] (cap) -- (dec1);
+\draw[arr] (dec1.west) -| node[above,pos=0.25,font=\scriptsize]{sí} (yes);
+\draw[arr] (dec1.east) -| node[above,pos=0.25,font=\scriptsize]{no} (no);
+\draw[arr] (no) -- (out);
+\end{tikzpicture}
+\caption{Arbitraje de cobertura. De \textasciitilde60 capacidades de ataque, menos de 20 se ejecutaban con garantía en cada corrida; el resto quedaba sujeto al criterio del agente turno a turno.}
+\label{fig:coverage}
+\end{figure}
+
+La respuesta de ingeniería no fue afinar el prompt para que el agente ``recordara'' usar más herramientas (Figura~\ref{fig:coverage}). Fue sacar las capacidades de alto valor y bajo riesgo de falso positivo del terreno discrecional del LLM y convertirlas en un barrido determinístico que corre siempre, en paralelo, antes de que el agente entre en juego. El modelo queda para lo que de verdad requiere criterio: encadenar hallazgos, priorizar superficie ambigua, redactar contexto.
+
+\section{Verificación adversarial, no opcional}
+
+Un agente que reporta sus propios hallazgos sin que nadie más los cuestione tiene un conflicto de interés estructural: fue entrenado para completar la tarea, no para dudar de sí mismo.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node distance=6mm and 8mm,
+  box/.style={rectangle, rounded corners=2pt, draw=lineblack, text width=3.3cm, align=center, font=\small, minimum height=9mm, line width=0.5pt},
+  dec/.style={diamond, draw=lineblack, aspect=2.6, text width=2.7cm, align=center, font=\scriptsize, inner sep=1pt, line width=0.5pt},
+  arr/.style={-{Latex[length=2mm]}, line width=0.5pt}
+]
+\node[box, fill=boxgray] (a1) {Agente propone un hallazgo};
+\node[box, fill=boxgray, below=of a1] (a2) {Verificador independiente, sin el razonamiento original};
+\node[dec, fill=boxyellow, below=7mm of a2] (a3) {¿Evidencia fresca de esta corrida?};
+\node[box, fill=boxgreen, below left=9mm and -3mm of a3] (a4) {Confirmado};
+\node[box, fill=boxred, below right=9mm and -3mm of a3] (a5) {Descartado};
+
+\draw[arr] (a1) -- (a2);
+\draw[arr] (a2) -- (a3);
+\draw[arr] (a3.west) -| node[above,pos=0.25,font=\scriptsize]{sí} (a4);
+\draw[arr] (a3.east) -| node[above,pos=0.25,font=\scriptsize]{no} (a5);
+\end{tikzpicture}
+\caption{Pipeline de verificación. El paso de verificación corre en una instancia separada del modelo, sin el hilo de razonamiento que produjo el hallazgo original.}
+\label{fig:verify}
+\end{figure}
+
+En una corrida contra un objetivo de producción, el agente de ataque reportó 7 hallazgos de severidad crítica o alta en una sola pasada. El pipeline de la Figura~\ref{fig:verify}, ejecutado inmediatamente después, descartó 6 de los 7 por falta de evidencia fresca. La causa, encontrada al leer el prompt exacto del agente: una instrucción le decía ``no vuelvas a probar lo que ya está confirmado en corridas anteriores''. El agente citaba hallazgos históricos como propios de esta corrida, sin ejecutar una sola herramienta nueva sobre ellos.
+
+La instrucción no estaba mal por descuido, estaba mal porque optimizaba lo incorrecto: ahorrar tiempo evitando reconfirmar lo obvio, sin considerar que un modelo de lenguaje no distingue entre ``esto ya se sabe'' y ``esto lo puedo afirmar como propio''. El arreglo no fue prohibir el contexto histórico, sino cambiar su función: de hecho a pista.
+
+El sistema, en este caso, funcionó como debía. La capa de verificación cazó el 86\% del ruido. Pero un sistema que necesita esa capa para no mentir por accidente merece la misma desconfianza estructural que cualquier fuente sin verificar, aunque llegue con forma de reporte técnico.
+
+\section{Jerarquía de evidencia}
+
+No todos los ``hallazgos confirmados'' que produce un agente de IA tienen el mismo peso probatorio. Ordenarlos por qué tan difícil es que produzcan un falso positivo cambia cómo debe leerse un reporte generado por IA.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+\draw[-{Latex[length=1.8mm]}, line width=0.5pt] (0,0.1) -- (0,-3.55) node[below, font=\scriptsize\itshape, text width=2.4cm, align=center, yshift=-1mm]{riesgo de falso\\positivo};
+
+\node[anchor=east, text width=2.6cm, align=right] at (-0.15,0) {Heurística de texto};
+\draw[draw=lineblack,fill=boxgray,line width=0.4pt] (0,-0.21) rectangle (2.0,0.21);
+
+\node[anchor=east, text width=2.6cm, align=right] at (-0.15,-1.1) {Señal por tiempo};
+\draw[draw=lineblack,fill=bargray,line width=0.4pt] (0,-1.31) rectangle (3.5,-0.89);
+
+\node[anchor=east, text width=2.6cm, align=right] at (-0.15,-2.2) {Herramienta real};
+\draw[draw=lineblack,fill=bargray!70!black,line width=0.4pt] (0,-2.41) rectangle (5.0,-1.99);
+
+\node[anchor=east, text width=2.6cm, align=right] at (-0.15,-3.3) {Callback de red};
+\draw[draw=lineblack,fill=barsolid,line width=0.4pt] (0,-3.51) rectangle (6.2,-3.09);
+\end{tikzpicture}
+\caption{Jerarquía de confianza para técnicas de confirmación automatizada. El callback de red, donde el propio objetivo hace una petición saliente hacia un dominio único generado para esa prueba, es prueba autocontenida: no requiere que el modelo interprete nada.}
+\label{fig:hierarchy}
+\end{figure}
+
+Cuando un sistema tiene disponible una técnica de confirmación por callback de red (Figura~\ref{fig:hierarchy}), la decisión de diseño correcta es hacerla correr siempre que el modo de escaneo lo permita, no dejarla como una opción más entre docenas que el agente puede o no elegir llamar.
+
+\section{El modelo no es el cuello de botella}
+
+La suposición natural es que un modelo más grande, más especializado o ``sin restricciones'' produce mejores resultados de seguridad ofensiva. Puesta a prueba de forma controlada, esa suposición no se sostuvo.
+
+La lección no es que los modelos especializados sean malos. Es que orquestar herramientas de forma confiable dentro de un contrato estructurado es una habilidad distinta de ``saber de seguridad ofensiva''. Una prueba separada con un modelo especializado en ofensiva lo mostró sin ambigüedad: el modelo no respetaba el contrato de \textit{tool-calling} del orquestador, inventaba su propia sintaxis de salida en vez de usar las llamadas a función estructuradas que el sistema esperaba, quedando inutilizable como agente pese a tener conocimiento de dominio sólido.
+
+\begin{figure*}[t]
+\centering
+\begin{subfigure}[b]{0.47\textwidth}
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+\draw[-{Latex[length=1.8mm]}, line width=0.5pt] (-0.3,0) -- (-0.3,3.3);
+\draw[line width=0.5pt] (-0.3,0) -- (5,0);
+\draw[draw=lineblack,fill=bargray,line width=0.4pt] (0.3,0) rectangle (1.3,2.15);
+\node[above] at (0.8,2.15) {21.5};
+\node[below,yshift=-1mm] at (0.8,0) {base};
+\draw[draw=lineblack,fill=barsolid,line width=0.4pt] (2.3,0) rectangle (3.3,3.05);
+\node[above] at (2.8,3.05) {60.4};
+\node[below,yshift=-1mm] at (2.8,0) {sin censura};
+\node[font=\scriptsize\itshape,rotate=90] at (-0.75,1.5) {minutos};
+\end{tikzpicture}
+\subcaption{Mismo objetivo, mismo recall}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.47\textwidth}
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+\draw[-{Latex[length=1.8mm]}, line width=0.5pt] (-0.3,0) -- (-0.3,3.3);
+\draw[line width=0.5pt] (-0.3,0) -- (5,0);
+\draw[draw=lineblack,fill=bargray,line width=0.4pt] (0.3,0) rectangle (1.3,3.0);
+\node[above] at (0.8,3.0) {7};
+\node[below,yshift=-1mm] at (0.8,0) {antes};
+\draw[draw=lineblack,fill=barsolid,line width=0.4pt] (2.3,0) rectangle (3.3,0.45);
+\node[above] at (2.8,0.45) {1};
+\node[below,yshift=-1mm] at (2.8,0) {después};
+\node[font=\scriptsize\itshape,rotate=90] at (-0.75,1.5) {hallazgos sin verificar};
+\end{tikzpicture}
+\subcaption{Antes / después del fix de prompt}
+\end{subfigure}
+\caption{(a) Dos variantes de un modelo local de \textasciitilde9B parámetros contra el mismo objetivo de laboratorio: recall idéntico, pero la variante ``sin censura'' tardó 2.8\texttimes\ más y produjo un falso positivo adicional. (b) En el mismo sistema, corregir una única instrucción de prompt redujo de 7 a 1 los hallazgos crítico/alto que llegaban a verificación sin evidencia fresca.}
+\label{fig:compare}
+\end{figure*}
+
+\section{La fragilidad del entorno como fallo silencioso}
+
+De todos los modos de fallo posibles, el más peligroso no es que el modelo alucine. Es que una herramienta real, correctamente diseñada, deje de ejecutarse por una razón ajena a la lógica del sistema, sin que nadie lo note porque el sistema sigue produciendo un reporte de apariencia normal.
+
+Un motor de inyección determinístico dejó de correr durante una sesión completa de pruebas contra un objetivo real. La causa no estaba en su código: el proceso orquestador se había iniciado con una variable de entorno distinta a la de referencia, y esa diferencia hacía que el sistema operativo resolviera el nombre del binario hacia un ejecutable equivocado. El síntoma visible fue un mensaje de error genérico entre docenas de líneas de registro, fácil de confundir con ``el objetivo no era vulnerable'' en vez de ``la herramienta nunca corrió''.
+
+Este tipo de falla reduce la cobertura real por debajo de la reportada, de forma consistente mientras la condición del entorno persista. La respuesta correcta no es documentar ``recuerda configurar la variable''; eso traslada la responsabilidad a la memoria humana. La respuesta correcta es que el sistema garantice sus propias condiciones de entorno al ejecutar cada herramienta, sin importar cómo fue invocado.
+
+\section{Principios de diseño}
+
+\begin{enumerate}
+\item \textbf{Lo crítico no es opcional para el modelo.} Si una capacidad debe correr siempre, conviértela en un paso determinístico del pipeline, no en una herramienta más entre muchas.
+\item \textbf{Ningún hallazgo se cree en la misma pasada que lo produjo.} Un paso de verificación independiente, sin el razonamiento original a la vista, distingue un reporte de una alucinación con formato de reporte.
+\item \textbf{Jerarquiza la evidencia y dilo en el reporte.} Un callback de red y una heurística de texto no deberían llegar al lector bajo la misma etiqueta de ``confirmado''.
+\item \textbf{El contexto histórico es una pista, nunca un hecho.} Si un prompt autoriza al modelo a no re-verificar algo, ese algo terminará reportado sin evidencia.
+\item \textbf{El entorno de ejecución es parte de la superficie de confiabilidad.} Un sistema que depende de que su entorno esté ``bien configurado'' tiene una dependencia frágil disfrazada de asunción técnica.
+\end{enumerate}
+
+\vspace{0.6em}
+{\small\itshape Nota metodológica: las observaciones anteriores provienen de operar un único sistema en producción a lo largo de varias sesiones de trabajo, no de un estudio controlado sobre múltiples sistemas. Las cifras citadas son mediciones reales de esas corridas; los nombres de objetivo, cliente y herramienta se omiten deliberadamente por confidencialidad.}
+
+\end{document}

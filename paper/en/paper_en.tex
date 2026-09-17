@@ -1,0 +1,198 @@
+\documentclass[10pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=0.85in,columnsep=0.32in]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+
+\definecolor{boxgreen}{RGB}{224,242,224}
+\definecolor{boxyellow}{RGB}{252,244,214}
+\definecolor{boxred}{RGB}{250,222,222}
+\definecolor{boxgray}{RGB}{238,238,235}
+\definecolor{lineblack}{RGB}{20,20,20}
+\definecolor{barsolid}{RGB}{25,25,25}
+\definecolor{bargray}{RGB}{143,143,137}
+
+\title{\LARGE\bfseries When the Agent Decides:\\[2pt] Five Design Failures in Autonomous Offensive Security Agents}
+\author{
+  {\large Ricardo Martínez}\\[2pt]
+  {\small Cloud Security \& Applied AI}
+}
+\date{\small September 2026}
+
+\begin{document}
+\twocolumn[
+  \begin{@twocolumnfalse}
+    \maketitle
+    \begin{abstract}
+    \noindent
+    Autonomous AI agents for penetration testing promise to scale offensive work without scaling the human team. This piece documents five field observations, drawn from operating one such system against real targets over several months, on why the reliability of these agents depends less on the capability of the model orchestrating them and more on concrete engineering decisions: what the LLM is allowed to decide and what it isn't, how a finding gets verified before it is believed, and how silently the system degrades when something in its environment fails. Four figures grounded in real measurements are presented, closing with five design principles applicable to any agentic system operating against real attack surface.
+    \end{abstract}
+    \vspace{1.2em}
+  \end{@twocolumnfalse}
+]
+
+\section{The Mirage of Total Autonomy}
+
+The first instinct when building a pentesting agent is to let the language model decide which tool to use at each step. It is also the first source of a coverage problem that stays invisible until someone actually measures it.
+
+In a system with roughly sixty available attack capabilities (injection, SSRF, deserialization, secret leakage, access control, JWT, GraphQL), auditing how many ran with guaranteed certainty on every run produced an uncomfortable number: fewer than twenty. Everything else only ran if the agent, in that moment, decided it was worth calling. One concrete test confirmed it: a domain reconnaissance technique showed up in one run and vanished in the next against the exact same target, with nothing in the environment having changed.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node distance=7mm and 8mm,
+  box/.style={rectangle, rounded corners=2pt, draw=lineblack, text width=3.1cm, align=center, font=\small, minimum height=9mm, line width=0.5pt},
+  dec/.style={diamond, draw=lineblack, aspect=2.4, text width=2.5cm, align=center, font=\scriptsize, inner sep=1pt, line width=0.5pt},
+  arr/.style={-{Latex[length=2mm]}, line width=0.5pt}
+]
+\node[box, fill=boxgray] (cap) {Attack capability available};
+\node[dec, fill=boxyellow, below=of cap] (dec1) {Part of the deterministic core?};
+\node[box, fill=boxgreen, below left=9mm and -2mm of dec1] (yes) {Always runs, in parallel};
+\node[box, fill=boxred, below right=9mm and -2mm of dec1] (no) {Model decides whether to call it};
+\node[box, fill=boxgray, below=8mm of no, text width=3.3cm] (out) {Coverage subject to the agent's judgment that turn};
+
+\draw[arr] (cap) -- (dec1);
+\draw[arr] (dec1.west) -| node[above,pos=0.25,font=\scriptsize]{yes} (yes);
+\draw[arr] (dec1.east) -| node[above,pos=0.25,font=\scriptsize]{no} (no);
+\draw[arr] (no) -- (out);
+\end{tikzpicture}
+\caption{Coverage arbitration. Of \textasciitilde60 available attack capabilities, fewer than 20 ran with guaranteed certainty on every run; the rest were subject to the agent's judgment call each turn.}
+\label{fig:coverage}
+\end{figure}
+
+The engineering answer was not to tune the prompt so the agent would ``remember'' to use more tools (Figure~\ref{fig:coverage}). It was to pull high-value, low-false-positive-risk capabilities out of the LLM's discretionary territory entirely and turn them into a deterministic sweep that always runs, in parallel, before the agent even enters the picture. The model is left for what genuinely requires judgment: chaining findings together, prioritizing ambiguous surface area, writing up context.
+
+\section{Adversarial Verification, Not Optional}
+
+An agent that reports its own findings with no one else questioning them has a structural conflict of interest: it was trained to complete the task, not to doubt itself.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node distance=6mm and 8mm,
+  box/.style={rectangle, rounded corners=2pt, draw=lineblack, text width=3.3cm, align=center, font=\small, minimum height=9mm, line width=0.5pt},
+  dec/.style={diamond, draw=lineblack, aspect=2.6, text width=2.7cm, align=center, font=\scriptsize, inner sep=1pt, line width=0.5pt},
+  arr/.style={-{Latex[length=2mm]}, line width=0.5pt}
+]
+\node[box, fill=boxgray] (a1) {Agent proposes a finding};
+\node[box, fill=boxgray, below=of a1] (a2) {Independent verifier, no original reasoning};
+\node[dec, fill=boxyellow, below=7mm of a2] (a3) {Fresh evidence from this run?};
+\node[box, fill=boxgreen, below left=9mm and -3mm of a3] (a4) {Confirmed};
+\node[box, fill=boxred, below right=9mm and -3mm of a3] (a5) {Discarded};
+
+\draw[arr] (a1) -- (a2);
+\draw[arr] (a2) -- (a3);
+\draw[arr] (a3.west) -| node[above,pos=0.25,font=\scriptsize]{yes} (a4);
+\draw[arr] (a3.east) -| node[above,pos=0.25,font=\scriptsize]{no} (a5);
+\end{tikzpicture}
+\caption{Verification pipeline. The verification step runs on a separate model instance, without the reasoning thread that produced the original finding.}
+\label{fig:verify}
+\end{figure}
+
+In one run against a production target, the attack agent reported 7 critical or high severity findings in a single pass. The pipeline in Figure~\ref{fig:verify}, run immediately after, discarded 6 of the 7 for lack of fresh evidence. The cause, found by reading the agent's exact prompt: an instruction told it ``don't re-test what's already confirmed from previous runs.'' The agent cited historical findings as if they belonged to this run, without executing a single new tool against them.
+
+The instruction was not wrong by carelessness, it was wrong because it optimized for the wrong thing: saving time by skipping re-confirmation of the obvious, without accounting for the fact that a language model does not distinguish between ``this is already known'' and ``I can claim this as my own.'' The fix was not to ban historical context, but to change its function: from fact to hint.
+
+The system, in this case, worked exactly as it should. The verification layer caught 86\% of the noise. But a system that needs that layer to avoid lying by accident deserves the same structural distrust applied to any unverified source, even when it arrives dressed as a technical report.
+
+\section{An Evidence Hierarchy}
+
+Not every ``confirmed finding'' a security AI agent produces carries the same evidentiary weight. Ranking confirmation techniques by how hard they are to false-positive changes entirely how an AI-generated security report should be read.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+\draw[-{Latex[length=1.8mm]}, line width=0.5pt] (0,0.1) -- (0,-3.55) node[below, font=\scriptsize\itshape, text width=2.4cm, align=center, yshift=-1mm]{false-positive\\risk};
+
+\node[anchor=east, text width=2.6cm, align=right] at (-0.15,0) {Text heuristic};
+\draw[draw=lineblack,fill=boxgray,line width=0.4pt] (0,-0.21) rectangle (2.0,0.21);
+
+\node[anchor=east, text width=2.6cm, align=right] at (-0.15,-1.1) {Timing signal};
+\draw[draw=lineblack,fill=bargray,line width=0.4pt] (0,-1.31) rectangle (3.5,-0.89);
+
+\node[anchor=east, text width=2.6cm, align=right] at (-0.15,-2.2) {Real-tool re-run};
+\draw[draw=lineblack,fill=bargray!70!black,line width=0.4pt] (0,-2.41) rectangle (5.0,-1.99);
+
+\node[anchor=east, text width=2.6cm, align=right] at (-0.15,-3.3) {OOB network};
+\node[anchor=east, text width=2.6cm, align=right] at (-0.15,-3.62) {\scriptsize callback};
+\draw[draw=lineblack,fill=barsolid,line width=0.4pt] (0,-3.51) rectangle (6.2,-3.09);
+\end{tikzpicture}
+\caption{Confidence hierarchy for automated confirmation techniques. The out-of-band network callback, where the target itself makes an outbound request to a unique domain generated for that specific probe, is self-contained proof: it requires no interpretation from the model at all.}
+\label{fig:hierarchy}
+\end{figure}
+
+When a system has an out-of-band network callback technique available (Figure~\ref{fig:hierarchy}), the correct design decision is to run it every time the scan mode allows, not to leave it as one option among dozens the agent may or may not choose to call.
+
+\section{The Model Isn't the Bottleneck}
+
+The natural assumption is that a bigger, more specialized, or ``uncensored'' model produces better offensive security results. Put to a controlled test, that assumption did not hold.
+
+The lesson is not that specialized models are bad. It is that reliably orchestrating tools within a structured contract is a distinct skill from ``knowing offensive security.'' A separate test with a model specialized in offensive security showed this without ambiguity: the model did not honor the orchestrator's tool-calling contract, it invented its own output syntax instead of using the structured function calls the system expected, rendering it effectively unusable as an agent despite solid domain knowledge.
+
+\begin{figure*}[t]
+\centering
+\begin{subfigure}[b]{0.47\textwidth}
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+\draw[-{Latex[length=1.8mm]}, line width=0.5pt] (-0.3,0) -- (-0.3,3.3);
+\draw[line width=0.5pt] (-0.3,0) -- (5,0);
+\draw[draw=lineblack,fill=bargray,line width=0.4pt] (0.3,0) rectangle (1.3,2.15);
+\node[above] at (0.8,2.15) {21.5};
+\node[below,yshift=-1mm] at (0.8,0) {base};
+\draw[draw=lineblack,fill=barsolid,line width=0.4pt] (2.3,0) rectangle (3.3,3.05);
+\node[above] at (2.8,3.05) {60.4};
+\node[below,yshift=-1mm] at (2.8,0) {uncensored};
+\node[font=\scriptsize\itshape,rotate=90] at (-0.75,1.5) {minutes};
+\end{tikzpicture}
+\subcaption{Same target, same recall}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.47\textwidth}
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+\draw[-{Latex[length=1.8mm]}, line width=0.5pt] (-0.3,0) -- (-0.3,3.3);
+\draw[line width=0.5pt] (-0.3,0) -- (5,0);
+\draw[draw=lineblack,fill=bargray,line width=0.4pt] (0.3,0) rectangle (1.3,3.0);
+\node[above] at (0.8,3.0) {7};
+\node[below,yshift=-1mm] at (0.8,0) {before};
+\draw[draw=lineblack,fill=barsolid,line width=0.4pt] (2.3,0) rectangle (3.3,0.45);
+\node[above] at (2.8,0.45) {1};
+\node[below,yshift=-1mm] at (2.8,0) {after};
+\node[font=\scriptsize\itshape,rotate=90] at (-0.75,1.5) {unverified findings};
+\end{tikzpicture}
+\subcaption{Before / after the prompt fix}
+\end{subfigure}
+\caption{(a) Two variants of a local \textasciitilde9B-parameter model against the same lab target: identical recall, but the ``uncensored'' variant took 2.8\texttimes\ longer and produced one additional false positive. (b) In the same system, fixing a single prompt instruction reduced from 7 to 1 the critical/high findings reaching verification without fresh evidence.}
+\label{fig:compare}
+\end{figure*}
+
+\section{Environment Fragility as a Silent Failure}
+
+Of all the possible failure modes, the most dangerous is not the model hallucinating. It is a real, correctly-built tool silently failing to run for a reason entirely unrelated to the system's logic, with nobody noticing because the system keeps producing a report that looks perfectly normal.
+
+A deterministic injection engine failed to run for an entire testing session against a real target. The cause was not in its code: the orchestrating process had been started with an environment variable different from the reference environment, and that single difference made the operating system resolve the binary's name to the wrong executable sharing that name. The visible symptom was one generic error line buried among dozens of log entries, easy to mistake for ``the target wasn't vulnerable'' instead of ``the tool never ran.''
+
+This kind of failure drops real coverage below reported coverage, consistently, for as long as the environmental condition persists. The correct response is not to document ``remember to export the right variable''; that offloads the responsibility onto human memory. The correct response is for the system itself to guarantee its own environmental conditions when executing each tool, regardless of how it was launched.
+
+\section{Design Principles}
+
+\begin{enumerate}
+\item \textbf{Critical capabilities are never optional for the model.} If something must always run, make it a deterministic pipeline step, not just another tool among many.
+\item \textbf{No finding is trusted in the same pass that produced it.} An independent verification step, without the original reasoning in view, is the difference between a report and a hallucination wearing a report's clothes.
+\item \textbf{Rank your evidence, and say so in the report.} A network-callback detection and a text-heuristic detection should not reach the reader under the same ``confirmed'' label.
+\item \textbf{Historical context is a hint, never a fact.} If a prompt gives the model permission to skip re-verifying something, that something will eventually get reported without evidence.
+\item \textbf{The runtime environment is part of the reliability surface.} A system that depends on its environment being configured ``the way it should be'' has a fragile dependency disguised as a technical assumption.
+\end{enumerate}
+
+\vspace{0.6em}
+{\small\itshape Methodological note: the observations above come from operating a single system in production across several work sessions, not from a controlled study across multiple systems. The figures cited are real measurements from those runs; target, client, and tool names are deliberately omitted for confidentiality.}
+
+\end{document}
