@@ -51,6 +51,12 @@ Each file runs standalone with no dependencies beyond the Python standard librar
 
 The observations in the paper come from operating a single system in production across several work sessions — not a controlled study across multiple systems. The figures cited are real measurements from those runs.
 
+## References
+
+- MITRE. [CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition](https://cwe.mitre.org/data/definitions/367.html).
+- Jackson, C., Barth, A., Bortz, A., Shao, W., Boneh, D. *Protecting Browsers from DNS Rebinding Attacks*. ACM CCS, 2007.
+- Wataoka, K., Takahashi, T., Ri, R. *Self-Preference Bias in LLM-as-a-Judge*. [arXiv:2410.21819](https://arxiv.org/abs/2410.21819), 2024.
+
 ---
 
 # Cuando el agente decide *(ES)*

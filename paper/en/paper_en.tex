@@ -8,6 +8,7 @@
 \usepackage{subcaption}
 \usepackage{xcolor}
 \usepackage[hidelinks]{hyperref}
+\usepackage{float}
 
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{0.55em}
@@ -154,7 +155,7 @@ The fix (Figure~\ref{fig:retry}) was not to retry everything, but to distinguish
 
 \section{Adversarial Verification, Not Optional}
 
-An agent that reports its own findings with no one else questioning them has a structural conflict of interest: it was trained to complete the task, not to doubt itself.
+An agent that reports its own findings with no one else questioning them has a structural conflict of interest: it was trained to complete the task, not to doubt itself. The literature on LLMs as judges documents the same pattern from another angle --- a model tends to rate an output more favorably when it recognizes it as its own~\cite{selfpreference2026}, exactly the bias that adversarial verification, with no access to the original reasoning trace, is designed to remove.
 
 \begin{figure}[h]
 \centering
@@ -372,7 +373,7 @@ The real case that forced this design (Figure~\ref{fig:redact}): a new phase of 
 
 Restricting what a scan is allowed to target (never cloud metadata, never private ranges without explicit authorization) sounds, at first glance, like a check performed once, when the request is accepted. That is precisely the surface an attacker --- or a hostile target --- can exploit.
 
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
 \begin{tikzpicture}[font=\scriptsize]
 \node[rectangle, draw=lineblack, fill=boxgreen, rounded corners=2pt, text width=3.0cm, align=center, minimum height=9mm, line width=0.4pt] (t0) {t=0: target IP validated --- public, authorized};
@@ -388,7 +389,7 @@ Restricting what a scan is allowed to target (never cloud metadata, never privat
 \label{fig:toctou}
 \end{figure}
 
-The principle in Figure~\ref{fig:toctou} generalizes beyond network scanning: any security control expressed as ``checked on the way in'' leaves open the window between the check and the actual use. If the system later follows redirects, resolves names again, or reuses a decision made minutes earlier, that window is exploitable. The fix is not a stricter check at the start; it is repeating the same validation at every point where the system actually acts, and tying the action to the exact result of that re-validation.
+The principle in Figure~\ref{fig:toctou} is an instance of a well-documented vulnerability class, TOCTOU (\emph{time-of-check to time-of-use})~\cite{cwe367}; the concrete DNS-rebind vector that exploits it was formally characterized nearly two decades ago~\cite{dnsrebind2007} and remains effective against new systems today. The principle generalizes beyond network scanning: any security control expressed as ``checked on the way in'' leaves open the window between the check and the actual use. If the system later follows redirects, resolves names again, or reuses a decision made minutes earlier, that window is exploitable. The fix is not a stricter check at the start; it is repeating the same validation at every point where the system actually acts, and tying the action to the exact result of that re-validation.
 
 \section{Design Principles}
 
@@ -406,5 +407,11 @@ The principle in Figure~\ref{fig:toctou} generalizes beyond network scanning: an
 
 \vspace{0.6em}
 {\small\itshape Methodological note: the observations above come from operating a single system in production across several work sessions, not from a controlled study across multiple systems. The figures cited are real measurements from those runs; target, client, and tool names are deliberately omitted for confidentiality.}
+
+\begin{thebibliography}{9}
+\bibitem{cwe367} MITRE. \emph{CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition}. cwe.mitre.org/data/definitions/367.html.
+\bibitem{dnsrebind2007} Jackson, C., Barth, A., Bortz, A., Shao, W., Boneh, D. \emph{Protecting Browsers from DNS Rebinding Attacks}. ACM Conference on Computer and Communications Security (CCS), 2007.
+\bibitem{selfpreference2026} Wataoka, K., Takahashi, T., Ri, R. \emph{Self-Preference Bias in LLM-as-a-Judge}. arXiv:2410.21819, 2024.
+\end{thebibliography}
 
 \end{document}

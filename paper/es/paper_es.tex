@@ -9,6 +9,7 @@
 \usepackage{subcaption}
 \usepackage{xcolor}
 \usepackage[hidelinks]{hyperref}
+\usepackage{float}
 
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{0.55em}
@@ -156,7 +157,7 @@ El arreglo (Figura~\ref{fig:retry}) no fue reintentar todo, sino distinguir el t
 
 \section{Verificación adversarial, no opcional}
 
-Un agente que reporta sus propios hallazgos sin que nadie más los cuestione tiene un conflicto de interés estructural: fue entrenado para completar la tarea, no para dudar de sí mismo.
+Un agente que reporta sus propios hallazgos sin que nadie más los cuestione tiene un conflicto de interés estructural: fue entrenado para completar la tarea, no para dudar de sí mismo. La literatura sobre LLMs como jueces documenta el mismo patrón desde otro ángulo --- un modelo tiende a evaluar más favorablemente una salida cuando reconoce que es propia~\cite{selfpreference2026}, precisamente el sesgo que una verificación adversarial, sin acceso al razonamiento original, está diseñada para eliminar.
 
 \begin{figure}[h]
 \centering
@@ -374,7 +375,7 @@ El caso real que forzó este diseño (Figura~\ref{fig:redact}): una fase nueva d
 
 Restringir a qué puede apuntar un escaneo (nunca metadata de nube, nunca rangos privados sin autorización explícita) suena, a primera vista, como un chequeo que se hace una vez, al recibir la solicitud. Esa es precisamente la superficie que un atacante --- o un objetivo hostil --- puede explotar.
 
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
 \begin{tikzpicture}[font=\scriptsize]
 \node[rectangle, draw=lineblack, fill=boxgreen, rounded corners=2pt, text width=3.0cm, align=center, minimum height=9mm, line width=0.4pt] (t0) {t=0: se valida la IP del objetivo --- pública, autorizada};
@@ -390,7 +391,7 @@ Restringir a qué puede apuntar un escaneo (nunca metadata de nube, nunca rangos
 \label{fig:toctou}
 \end{figure}
 
-El principio de la Figura~\ref{fig:toctou} generaliza más allá del escaneo de red: cualquier control de seguridad que se exprese como ``se revisó al entrar'' deja abierta la ventana entre la revisión y el uso real. Si el sistema después sigue redirecciones, resuelve nombres de nuevo, o reutiliza una decisión tomada minutos antes, esa ventana es explotable. La corrección no es una validación más estricta al inicio; es repetir la misma validación en cada punto donde el sistema realmente actúa, y atar la acción al resultado exacto de esa revalidación.
+El principio de la Figura~\ref{fig:toctou} es una instancia de una clase de vulnerabilidad bien documentada, TOCTOU (\emph{time-of-check to time-of-use})~\cite{cwe367}; el vector concreto del DNS-rebind que la explota fue caracterizado formalmente hace casi dos décadas~\cite{dnsrebind2007} y sigue vigente contra sistemas nuevos. El principio generaliza más allá del escaneo de red: cualquier control de seguridad que se exprese como ``se revisó al entrar'' deja abierta la ventana entre la revisión y el uso real. Si el sistema después sigue redirecciones, resuelve nombres de nuevo, o reutiliza una decisión tomada minutos antes, esa ventana es explotable. La corrección no es una validación más estricta al inicio; es repetir la misma validación en cada punto donde el sistema realmente actúa, y atar la acción al resultado exacto de esa revalidación.
 
 \section{Principios de diseño}
 
@@ -408,5 +409,11 @@ El principio de la Figura~\ref{fig:toctou} generaliza más allá del escaneo de 
 
 \vspace{0.6em}
 {\small\itshape Nota metodológica: las observaciones anteriores provienen de operar un único sistema en producción a lo largo de varias sesiones de trabajo, no de un estudio controlado sobre múltiples sistemas. Las cifras citadas son mediciones reales de esas corridas; los nombres de objetivo, cliente y herramienta se omiten deliberadamente por confidencialidad.}
+
+\begin{thebibliography}{9}
+\bibitem{cwe367} MITRE. \emph{CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition}. cwe.mitre.org/data/definitions/367.html.
+\bibitem{dnsrebind2007} Jackson, C., Barth, A., Bortz, A., Shao, W., Boneh, D. \emph{Protecting Browsers from DNS Rebinding Attacks}. ACM Conference on Computer and Communications Security (CCS), 2007.
+\bibitem{selfpreference2026} Wataoka, K., Takahashi, T., Ri, R. \emph{Self-Preference Bias in LLM-as-a-Judge}. arXiv:2410.21819, 2024.
+\end{thebibliography}
 
 \end{document}
